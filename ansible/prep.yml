@@ -1,0 +1,15 @@
+---
+- hosts: all
+  name: Ansible Preparation
+  become: no
+
+  tasks:
+  - name: install ansible community.general
+    shell: ansible-galaxy collection install community.general
+    args:
+      chdir: /ansible
+      
+  - name: install ansible community.mysql
+    shell: ansible-galaxy collection install community.mysql
+    args:
+      chdir: /ansible

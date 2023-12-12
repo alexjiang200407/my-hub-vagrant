@@ -1,0 +1,138 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+require 'yaml'
+
+Vagrant.configure("2") do |config|
+
+  # this should be modified for each project before spin-up
+  #
+  project_name = "default"
+
+
+  # load local configuration file if exists
+  #
+  begin
+    lcfg = YAML::load_file('.vlocal.conf.yml')
+  rescue Errno::ENOENT
+    puts 'Failed to load vagrantfile yml environment settings, using defaults...'
+    lcfg = {}
+  end
+  # routine for setting default hash values
+  #
+  def hash_default(hash, key, def_val)
+    hash[key] = hash.key?(key) ? hash[key] : def_val
+  end
+
+  # set project_name if specified in local config
+  if lcfg.key?('project_name') == true
+    project_name = lcfg['project_name']
+  end
+
+  # set defaults for any data that was not set
+  hash_default lcfg, 'network', {}
+  hash_default lcfg['network'], 'is_private', true
+  hash_default lcfg['network'], 'ip_address', '192.168.33.20'
+  hash_default lcfg['network'], 'hostname', "#{project_name}.wut"
+  hash_default lcfg['network'], 'forward', {}
+  hash_default lcfg['network']['forward'], 'from', 0
+  hash_default lcfg['network']['forward'], 'to', 0
+  hash_default lcfg['network'], 'hostnames', {}
+  hash_default lcfg['network']['hostnames'], 'enabled', true
+  hash_default lcfg['network']['hostnames'], 'name', project_name
+  hash_default lcfg['network']['hostnames'], 'aliases', []
+  hash_default lcfg, 'vbox', {}
+  hash_default lcfg['vbox'], 'memory', 2048
+  hash_default lcfg['vbox'], 'use_gui', false
+  hash_default lcfg, 'timeout', 240
+
+  # Check for missing plugins and install as necessary
+  #
+  required_plugins = ['vagrant-hostmanager','vagrant-vbguest','vagrant-winnfsd']
+  plugin_installed = false
+  required_plugins.each do |plugin|
+    unless Vagrant.has_plugin?(plugin)
+      system "vagrant plugin install #{plugin}"
+      plugin_installed = true
+    end
+  end
+  # If new plugins installed, restart Vagrant process
+  if plugin_installed == true
+    exec "vagrant #{ARGV.join' '}"
+  end
+
+  # specify base vagrant box
+  #
+  config.vm.box = 'bento/ubuntu-22.04'
+  config.vm.define "v-#{project_name}"
+  config.vm.boot_timeout = lcfg['timeout']
+
+  # Disable automatic box update checking.
+  #
+  config.vm.box_check_update = false
+
+
+  # Create a private network, which allows host-only access to the machine
+  # using a specific IP.
+  #
+  config.vm.network 'private_network', ip: lcfg['network']['ip_address']
+  if lcfg['network']['forward']['from'] != 0
+    config.vm.network "forwarded_port", guest: lcfg['network']['forward']['to'], host: lcfg['network']['forward']['from']
+  end
+  config.vm.hostname = lcfg['network']['hostname']
+
+  # hostname management plugin
+  #
+  if lcfg['network']['hostnames']['enabled'] == true
+    config.hostmanager.enabled = true
+    config.hostmanager.manage_host = true
+    config.hostmanager.manage_guest = true
+    config.hostmanager.ignore_private_ip = false
+	    config.hostmanager.aliases = lcfg['network']['hostnames']['aliases']
+  end
+
+
+  # Share an additional folder to the guest VM. The first argument is
+  # the path on the host to the actual folder. The second argument is
+  # the path on the guest to mount the folder. And the optional third
+  # argument is a set of non-required options.
+  #
+  #config.vm.synced_folder '.', '/vagrant', disabled: true
+  # config.vm.synced_folder "shared", "/var/www/html", create: true, type: 'nfs',
+  # mount_options: %w{rw,async,fsc,nolock,tcp,rsize=32768,wsize=32768,hard,noatime,actimeo=2}
+
+  #config.vm.synced_folder "shared", "/var/www/html", :mount_options => ["dmode=777","fmode=666"]
+  #config.vm.synced_folder "shared", "/var/www/html", create: true, owner: 'root', group: 'root'
+
+  config.vm.synced_folder "shared", "/var/www/html", create: true, owner: 'root', group: 'root'
+  config.vm.synced_folder "logs", "/home/vagrant/.npm", create: true, owner: 'root', group: 'root'
+  config.vm.synced_folder "ansible", "/ansible"
+
+
+  # Provider-specific configuration
+  #
+  config.vm.provider 'virtualbox' do |vb|
+    vb.customize ["modifyvm", :id, "--cableconnected1", "on"]
+    vb.memory = lcfg['vbox']['memory']
+    vb.gui = lcfg['vbox']['use_gui']
+  end
+
+  # Ansible Preparation
+  #
+  config.vm.provision :ansible_local do |ansible|
+    ansible.provisioning_path = '/ansible'
+    ansible.playbook = 'prep.yml'
+    ansible.inventory_path = 'inventory'
+    ansible.limit = 'all'
+  end
+
+  # Ansible Main Provisioning
+  #
+  config.vm.provision :ansible_local do |ansible|
+    ansible.provisioning_path = '/ansible'
+    ansible.playbook = 'main.yml'
+    ansible.inventory_path = 'inventory'
+    ansible.limit = 'all'
+  end
+
+end
